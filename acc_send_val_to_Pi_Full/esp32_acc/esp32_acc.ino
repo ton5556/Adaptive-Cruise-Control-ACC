@@ -15,24 +15,25 @@ float measuredDist = 0;
 bool targetPresent = false;
 
 // ===== ACC PARAM =====
-const float DIST_TARGET = 200.0;   // mm - ระยะที่ต้องการรักษา
-const float DIST_MAX    = 600.0;   // mm - ถ้าไกลกว่านี้ถือว่าไม่มี target
-const float DIST_STOP   = 80.0;    // mm - หยุดถ้าใกล้กว่านี้
-const float Kgap        = 1.5;     // gain ของ gap controller
-const float CRUISE_SPEED = 150.0;  // pulse/s = ~185 mm/s
-const float SPEED_MAX   = 500.0;   // pulse/s = ~371 mm/s (แก้จาก 800 → ไม่เกิน physical limit)
+const float DIST_TARGET = 200.0;  // mm
+const float DIST_MAX = 600.0;     // mm
+const float DIST_STOP = 80.0;     // mm
+const float Kgap = 1.5;
+const float CRUISE_SPEED = 150.0;      // pulse/s (>60cm)
+const float BASE_FOLLOW_SPEED = 80.0;  // pulse/s - ความเร็วพื้นฐานตอนตาม target
+const float SPEED_MAX = 500.0;
 
 // ===== ENCODER CONVERSION =====
-const float CPR        = 275.0;    // pulse ต่อรอบ (X1)
-const float WHEEL_DIAM = 65.0;     // mm
+const float CPR = 275.0;                             // pulse ต่อรอบ (X1)
+const float WHEEL_DIAM = 65.0;                       // mm
 const float MM_PER_PULSE = (PI * WHEEL_DIAM) / CPR;  // ~0.742 mm/pulse
 
 // ===== TARGET SPEED =====
 float targetSpeed = 0;  // หน่วย pulse/s
 
 // ===== ENCODER =====
-#define ENCA   2
-#define ENCB   3
+#define ENCA 2
+#define ENCB 3
 #define ENCA_B 4
 #define ENCB_B 5
 
@@ -53,15 +54,15 @@ void IRAM_ATTR isrA_B() {
 #define AIN1 12
 #define AIN2 11
 #define PWMB 10
-#define BIN1  1
-#define BIN2  6
-#define STBY  7
+#define BIN1 1
+#define BIN2 6
+#define STBY 7
 
 float Kp = 0.15;
 float Ki = 0.8;
 const float I_LIMIT = 200.0;
-const int   PWM_MIN  = 20;
-const int   PWM_MAX  = 200;
+const int PWM_MIN = 20;
+const int PWM_MAX = 200;
 
 // ===== TIMING =====
 const unsigned long LOOP_MS = 50;
@@ -69,7 +70,7 @@ unsigned long lastTime = 0;
 
 // ===== PI STATE =====
 float integralA = 0, integralB = 0;
-int   lastPwmA  = 0, lastPwmB  = 0;  // เก็บไว้ส่ง debug
+int lastPwmA = 0, lastPwmB = 0;  // เก็บไว้ส่ง debug
 
 // ===== UTILITY =====
 long readCount(volatile long &cnt) {
@@ -87,11 +88,11 @@ void updateDistance() {
 
   if (raw >= 8190) {
     targetPresent = false;
-    measuredDist  = DIST_MAX + 1;
+    measuredDist = DIST_MAX + 1;
     return;
   }
 
-  measuredDist  = (float)raw;
+  measuredDist = (float)raw;
   targetPresent = (measuredDist < DIST_MAX);
 }
 
@@ -102,11 +103,12 @@ float gapController() {
   }
 
   if (measuredDist < DIST_STOP) {
-    integralA = integralB = 0;  // reset integral เมื่อหยุด
-    return 0;
+    integralA = integralB = 0;
+    return 0;  // หยุด
   }
 
-  float speed = Kgap * (measuredDist - DIST_TARGET);
+  // BASE_FOLLOW + proportional gap
+  float speed = BASE_FOLLOW_SPEED + Kgap * (measuredDist - DIST_TARGET);
   return constrain(speed, 0, SPEED_MAX);
 }
 
@@ -123,17 +125,18 @@ void setup() {
 
   if (!lox.begin()) {
     Serial.println("ERROR:VL53L0X not found!");
-    while (1);
+    while (1)
+      ;
   }
   lox.startRangeContinuous();
 
   // ===== ENCODER =====
-  pinMode(ENCA,   INPUT_PULLUP);
-  pinMode(ENCB,   INPUT_PULLUP);
+  pinMode(ENCA, INPUT_PULLUP);
+  pinMode(ENCB, INPUT_PULLUP);
   pinMode(ENCA_B, INPUT_PULLUP);
   pinMode(ENCB_B, INPUT_PULLUP);
 
-  attachInterrupt(digitalPinToInterrupt(ENCA),   isrA,   CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCA), isrA, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCA_B), isrA_B, CHANGE);
 
   // ===== MOTOR =====
@@ -157,8 +160,13 @@ void setMotorA(int pwm) {
   int out = constrain(abs(pwm), 0, PWM_MAX);
   if (out > 0 && out < PWM_MIN) out = PWM_MIN;
 
-  if (pwm >= 0) { digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW);  }
-  else          { digitalWrite(AIN1, LOW);  digitalWrite(AIN2, HIGH); }
+  if (pwm >= 0) {
+    digitalWrite(AIN1, HIGH);
+    digitalWrite(AIN2, LOW);
+  } else {
+    digitalWrite(AIN1, LOW);
+    digitalWrite(AIN2, HIGH);
+  }
 
   ledcWrite(0, out);
   lastPwmA = (pwm >= 0) ? out : -out;
@@ -168,8 +176,13 @@ void setMotorB(int pwm) {
   int out = constrain(abs(pwm), 0, PWM_MAX);
   if (out > 0 && out < PWM_MIN) out = PWM_MIN;
 
-  if (pwm >= 0) { digitalWrite(BIN1, LOW);  digitalWrite(BIN2, HIGH); }
-  else          { digitalWrite(BIN1, HIGH); digitalWrite(BIN2, LOW);  }
+  if (pwm >= 0) {
+    digitalWrite(BIN1, LOW);
+    digitalWrite(BIN2, HIGH);
+  } else {
+    digitalWrite(BIN1, HIGH);
+    digitalWrite(BIN2, LOW);
+  }
 
   ledcWrite(1, out);
   lastPwmB = (pwm >= 0) ? out : -out;
@@ -179,8 +192,8 @@ void setMotorB(int pwm) {
 void loop() {
   unsigned long now = millis();
   if (now - lastTime < LOOP_MS) return;
-  float dt    = (now - lastTime) / 1000.0;
-  lastTime    = now;
+  float dt = (now - lastTime) / 1000.0;
+  lastTime = now;
 
   // ===== 1. SENSOR =====
   updateDistance();
@@ -203,10 +216,8 @@ void loop() {
   float errorA = targetSpeed - speedA;
   float errorB = targetSpeed - speedB;
 
-  bool satA = ((Kp * errorA + Ki * integralA) > PWM_MAX ||
-               (Kp * errorA + Ki * integralA) < -PWM_MAX);
-  bool satB = ((Kp * errorB + Ki * integralB) > PWM_MAX ||
-               (Kp * errorB + Ki * integralB) < -PWM_MAX);
+  bool satA = ((Kp * errorA + Ki * integralA) > PWM_MAX || (Kp * errorA + Ki * integralA) < -PWM_MAX);
+  bool satB = ((Kp * errorB + Ki * integralB) > PWM_MAX || (Kp * errorB + Ki * integralB) < -PWM_MAX);
 
   if (!satA || (errorA * integralA < 0))
     integralA = constrain(integralA + errorA * dt, -I_LIMIT, I_LIMIT);
@@ -222,12 +233,11 @@ void loop() {
   // ===== 5. SERIAL OUTPUT (CSV) → Pi5 =====
   // หน่วย: mm/s สำหรับ speed (แปลงจาก pulse/s × mm/pulse)
   Serial.printf("%lu,%.1f,%.1f,%.1f,%.1f,%d,%d\n",
-    now,
-    measuredDist,
-    targetSpeed  * MM_PER_PULSE,
-    speedA       * MM_PER_PULSE,
-    speedB       * MM_PER_PULSE,
-    lastPwmA,
-    lastPwmB
-  );
+                now,
+                measuredDist,
+                targetSpeed * MM_PER_PULSE,
+                speedA * MM_PER_PULSE,
+                speedB * MM_PER_PULSE,
+                lastPwmA,
+                lastPwmB);
 }
