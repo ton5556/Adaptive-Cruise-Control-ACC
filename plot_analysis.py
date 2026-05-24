@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import FancyArrowPatch
 
-LOG_DIR = os.path.expanduser("~/acc_logs")
+LOG_DIR = os.path.expanduser("D:/Arduino/Adaptive Cruise Control ACC/acc_logs")
 
 # ===== หาไฟล์ล่าสุด หรือรับ argument =====
 if len(sys.argv) == 3:
