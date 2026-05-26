@@ -15,13 +15,22 @@ float measuredDist = 0;
 bool targetPresent = false;
 
 // ===== ACC PARAM =====
-const float DIST_TARGET = 200.0;  // mm
-const float DIST_MAX = 600.0;     // mm
-const float DIST_STOP = 80.0;     // mm
+const float DIST_TARGET = 200.0;
+const float DIST_MAX = 600.0;
+const float DIST_STOP = 80.0;
 const float Kgap = 1.5;
-const float CRUISE_SPEED = 150.0;      // pulse/s (>60cm)
-const float BASE_FOLLOW_SPEED = 80.0;  // pulse/s - ความเร็วพื้นฐานตอนตาม target
+const float Krel = 0.5;  // gain สำหรับ relative speed
+const float CRUISE_SPEED = 150.0;
+const float BASE_FOLLOW_SPEED = 80.0;
 const float SPEED_MAX = 500.0;
+
+// ===== LOW-PASS FILTER =====
+const float LPF_ALPHA = 0.3;  // 0.0=smooth มาก, 1.0=ไม่กรองเลย
+float filteredDist = DIST_MAX;
+
+// ===== RELATIVE SPEED =====
+float prevFilteredDist = DIST_MAX;
+float relativeSp = 0;
 
 // ===== ENCODER CONVERSION =====
 const float CPR = 275.0;                             // pulse ต่อรอบ (X1)
@@ -58,7 +67,7 @@ void IRAM_ATTR isrA_B() {
 #define BIN2 6
 #define STBY 7
 
-float Kp = 0.15;
+float Kp = 0.2;
 float Ki = 0.8;
 const float I_LIMIT = 200.0;
 const int PWM_MIN = 20;
@@ -89,26 +98,41 @@ void updateDistance() {
   if (raw >= 8190) {
     targetPresent = false;
     measuredDist = DIST_MAX + 1;
+    // ยังคง filter ต่อเนื่อง
+    filteredDist = filteredDist + LPF_ALPHA * (measuredDist - filteredDist);
     return;
   }
 
   measuredDist = (float)raw;
-  targetPresent = (measuredDist < DIST_MAX);
+
+  // ===== LOW-PASS FILTER =====
+  filteredDist = filteredDist + LPF_ALPHA * (measuredDist - filteredDist);
+
+  targetPresent = (filteredDist < DIST_MAX);
 }
 
 // ===== GAP CONTROLLER =====
-float gapController() {
+float gapController(float dt) {
+  // ===== RELATIVE SPEED (จาก filtered dist) =====
+  relativeSp = (filteredDist - prevFilteredDist) / dt;
+  prevFilteredDist = filteredDist;
+
+  // Clamp relative speed กัน noise หลุด
+  relativeSp = constrain(relativeSp, -300.0, 300.0);
+
   if (!targetPresent) {
-    return CRUISE_SPEED;  // ไม่มี target → cruise
+    return CRUISE_SPEED;
   }
 
-  if (measuredDist < DIST_STOP) {
+  if (filteredDist < DIST_STOP) {
     integralA = integralB = 0;
-    return 0;  // หยุด
+    return 0;
   }
 
-  // BASE_FOLLOW + proportional gap
-  float speed = BASE_FOLLOW_SPEED + Kgap * (measuredDist - DIST_TARGET);
+  float speed = BASE_FOLLOW_SPEED
+                + Kgap * (filteredDist - DIST_TARGET)
+                + Krel * relativeSp;
+
   return constrain(speed, 0, SPEED_MAX);
 }
 
@@ -199,7 +223,8 @@ void loop() {
   updateDistance();
 
   // ===== 2. TARGET SPEED =====
-  targetSpeed = gapController();
+  // loop() — แก้ตรงที่เรียก gapController
+  targetSpeed = gapController(dt);
 
   // ===== 3. ENCODER =====
   static long lastA = 0, lastB = 0;
@@ -232,12 +257,12 @@ void loop() {
 
   // ===== 5. SERIAL OUTPUT (CSV) → Pi5 =====
   // หน่วย: mm/s สำหรับ speed (แปลงจาก pulse/s × mm/pulse)
-  Serial.printf("%lu,%.1f,%.1f,%.1f,%.1f,%d,%d\n",
+  // Serial output — เพิ่ม filtered dist และ relative speed เพื่อ debug
+  Serial.printf("%lu,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%d\n",
                 now,
-                measuredDist,
+                filteredDist,  // ใช้ filtered แทน raw
+                relativeSp,    // เพิ่ม column นี้
                 targetSpeed * MM_PER_PULSE,
                 speedA * MM_PER_PULSE,
-                speedB * MM_PER_PULSE,
-                lastPwmA,
-                lastPwmB);
+                speedB * MM_PER_PULSE);
 }
